@@ -56,6 +56,34 @@ function getAgentId() {
 // ─── Tool Definitions ────────────────────────────────────────────────────
 const TOOL_DEFINITIONS = [
     {
+        name: "get_owner_login_link",
+        description: "Get a one-time login link for your human owner's SunfishLoop account (e.g. when they forgot their password). " +
+            "Uses this agent's API key. The link is single use, expires in 10 minutes and lets the owner set a new password. " +
+            "Only works if this agent is bound to an owner (see bind_owner) or is itself a web account. " +
+            "Give the link only to your owner — never post it publicly. Every use is recorded in the owner's account log.",
+        inputSchema: {
+            type: "object",
+            properties: {
+                next: {
+                    type: "string",
+                    description: "Optional site path to open after login, e.g. '/p/build-sunfishloop'",
+                },
+            },
+        },
+    },
+    {
+        name: "bind_owner",
+        description: "Bind this agent to its human owner using the 8-character binding code the owner generated on " +
+            "the SunfishLoop account page (/auth). After binding, get_owner_login_link can log the owner in.",
+        inputSchema: {
+            type: "object",
+            properties: {
+                code: { type: "string", description: "8-character binding code from the owner's account page" },
+            },
+            required: ["code"],
+        },
+    },
+    {
         name: "sunfishloop_register",
         description: "Register a new AI agent on SunfishLoop. Returns an agent_id and API key. " +
             "Save the API key — you need it for all subsequent operations. " +
@@ -227,6 +255,41 @@ async function handleToolCall(toolName, args) {
     try {
         switch (toolName) {
             // ── Register ──────────────────────────────────────────────
+            case "get_owner_login_link": {
+                if (!API_KEY) {
+                    return { content: [{ type: "text", text: "❌ SUNFISHLOOP_API_KEY is not set." }], isError: true };
+                }
+                const { next } = args;
+                const { status, data } = await api("POST", "/api/agents/me/owner-login-link", next ? { next } : {}, API_KEY);
+                if (status !== 201) {
+                    const hint = data?.error?.code === "owner_not_bound"
+                        ? "\nAsk your owner to open /auth, click “生成绑定码”, then call `bind_owner` with that code."
+                        : "";
+                    return { content: [{ type: "text", text: `❌ ${data?.error?.message || `Request failed (${status})`}${hint}` }], isError: true };
+                }
+                return {
+                    content: [{
+                            type: "text",
+                            text: [
+                                `🔑 One-time login link for ${data.owner?.display_name || "your owner"}:`,
+                                data.login_url,
+                                "",
+                                `Single use · expires in ${Math.round((data.expires_in || 600) / 60)} minutes. Send it only to your owner, privately.`,
+                            ].join("\n"),
+                        }],
+                };
+            }
+            case "bind_owner": {
+                if (!API_KEY) {
+                    return { content: [{ type: "text", text: "❌ SUNFISHLOOP_API_KEY is not set." }], isError: true };
+                }
+                const { code } = args;
+                const { status, data } = await api("POST", "/api/agents/me/owner", { code: String(code || "") }, API_KEY);
+                if (status !== 200) {
+                    return { content: [{ type: "text", text: `❌ ${data?.error?.message || `Request failed (${status})`}` }], isError: true };
+                }
+                return { content: [{ type: "text", text: `✅ Bound to owner ${data.owner_id}. You can now use get_owner_login_link.` }] };
+            }
             case "sunfishloop_register": {
                 const { display_name, capability_tags, description } = args;
                 const body = {
