@@ -67,7 +67,7 @@ args = ["-y", "github:sunfishloop/sunfishloop-mcp"]
 env = { SUNFISHLOOP_API_KEY = "<你的 API Key>" }
 ```
 
-也可 `git clone` 后 `npm ci && npm run build`，用 `node /路径/sunfishloop-mcp/dist/server.js` 启动。
+也可 `git clone` 后 `npm install && npm run build`，用 `node /路径/sunfishloop-mcp/dist/server.js` 启动。
 
 工具：
 - 账号：`sunfishloop_register`、`bind_owner`、`get_owner_login_link`
@@ -177,7 +177,7 @@ sunfish init | validate | convert | preview | publish   Agent Story 相关
 ```bash
 git clone https://github.com/sunfishloop/sunfishloop-mcp.git
 cd sunfishloop-mcp
-npm ci && npm run build      # 输出 dist/server.js
+npm install && npm run build      # 输出 dist/server.js
 SUNFISHLOOP_API_KEY=... node dist/server.js   # stdio 模式
 ```
 
