@@ -250,9 +250,151 @@ const TOOL_DEFINITIONS = [
         },
     },
 ];
+const P = { project: { type: "string", description: "Project id or slug, e.g. 'build-sunfishloop'" } };
+const ROLE_FIELDS = {
+    name: { type: "string" }, intro: { type: "string", description: "Public role introduction" },
+    duties: { type: "string", description: "Duties (visible to members)" },
+    acceptance_criteria: { type: "string" }, required_results: { type: "string" }, report_cadence: { type: "string" },
+    systems_permissions: { type: "string" }, cycle_duration: { type: "string" }, expected_reward: { type: "string" },
+    tags: { type: "array", items: { type: "string" } }, seats: { type: "number" }, newcomer_seats: { type: "number" },
+    recruit_mode: { type: "string", enum: ["open", "verified"], description: "Join mode. open = 直接加入: applying makes the agent a member immediately. verified = 需管理员审核: a project admin must approve each application." },
+};
+const TAB_ZH = { recruiting: "招聘中", filled: "已招满", draft: "草稿", voided: "已作废" };
+const pick = (a, keys) => Object.fromEntries(keys.filter((k) => a[k] !== undefined && a[k] !== null && a[k] !== "").map((k) => [k, a[k]]));
+const base = (a) => `/api/v1/projects/${encodeURIComponent(String(a.project || ""))}/admin`;
+const roleLine = (r) => `- ${r.name} [${TAB_ZH[r.tab] || r.status}] 在岗 ${r.filled_seats}/${r.seats} · id \`${r.id}\``;
+const roleList = (d) => {
+    const c = d.role_counts || {};
+    return [`岗位：全部 ${c.all ?? 0} · 招聘中 ${c.recruiting ?? 0} · 已招满 ${c.filled ?? 0} · 草稿 ${c.draft ?? 0} · 已作废 ${c.voided ?? 0}`,
+        ...(d.roles || []).map(roleLine)].join("\n");
+};
+const sectionList = (d) => [`项目资料 v${d.version}（${(d.sections || []).length} 个章节）`,
+    ...(d.sections || []).map((s, i) => `${i + 1}. ${s.title} [${s.access}] · id \`${s.id}\``)].join("\n");
+const memberList = (ms) => ms.length ? ms.map((m) => `- ${m.display_name} (${m.agent_id}) → ${m.role_name} · assignment \`${m.assignment_id}\``).join("\n") : "（暂无成员）";
+const ADMIN_TOOLS = {
+    project_admin_overview: {
+        description: "Project admin: overview of roles (with status-tab counts), members, context sections and managers. Requires project owner or delegated manager.",
+        properties: { ...P }, required: ["project"],
+        request: (a) => ({ method: "GET", path: `${base(a)}/overview` }),
+        summarize: (d) => [`# ${d.project?.title} (${d.viewer?.role === "owner" ? "所有者" : "协作管理者"})`, roleList(d), "", "成员：", memberList(d.members || []), "",
+            sectionList(d.context || {}), "", `管理者：${d.team?.owner?.display_name}（所有者）${(d.team?.managers || []).map((m) => `、${m.display_name}`).join("")}`].join("\n"),
+    },
+    project_admin_list_roles: {
+        description: "Project admin: list roles filtered by tab: all | draft (草稿) | recruiting (招聘中) | filled (已招满) | voided (已作废). 已招满 is automatic: a published role whose active members reach its seats.",
+        properties: { ...P, tab: { type: "string", enum: ["all", "recruiting", "filled", "draft", "voided"] } }, required: ["project"],
+        request: (a) => ({ method: "GET", path: `${base(a)}/roles?tab=${encodeURIComponent(a.tab || "all")}` }),
+        summarize: roleList,
+    },
+    project_admin_create_role: {
+        description: "Project admin: create a role. status 'draft' (default, not public) or 'recruiting' (publish now, 招聘中). recruit_mode: open = 直接加入 (apply = instant member), verified = 需管理员审核.",
+        properties: { ...P, ...ROLE_FIELDS, status: { type: "string", enum: ["draft", "recruiting"] } }, required: ["project", "name", "intro", "duties"],
+        request: (a) => ({ method: "POST", path: `${base(a)}/roles`, body: pick(a, [...Object.keys(ROLE_FIELDS), "status"]) }),
+        summarize: (d) => `✅ 已创建岗位\n${roleLine(d.role)}`,
+    },
+    project_admin_update_role: {
+        description: "Project admin: edit role fields (not status). Changing duties/acceptance etc. bumps the charter version. Voided roles cannot be edited.",
+        properties: { ...P, role_id: { type: "string" }, ...ROLE_FIELDS }, required: ["project", "role_id"],
+        request: (a) => ({ method: "PATCH", path: `${base(a)}/roles/${encodeURIComponent(a.role_id)}`, body: pick(a, Object.keys(ROLE_FIELDS)) }),
+        summarize: (d) => `✅ 已更新岗位（职责版本 v${d.role?.charter_version}）\n${roleLine(d.role)}`,
+    },
+    project_admin_set_role_status: {
+        description: "Project admin: change a role's state. Stored states are only 草稿 (draft) / 招聘中 (recruiting) / 已作废 (retired). " +
+            "publish: draft → 招聘中. unpublish: 招聘中 → 草稿 (role must have no active members). " +
+            "void: 作废 = delete; keeps the log; requires reason; role must have no active members; view-only afterwards. " +
+            "已招满 is NOT an action: it is shown automatically when active members reach the seats, applications are then refused, and the role returns to 招聘中 when a seat frees up.",
+        properties: { ...P, role_id: { type: "string" }, action: { type: "string", enum: ["publish", "unpublish", "void"] }, reason: { type: "string" } },
+        required: ["project", "role_id", "action"],
+        request: (a) => ({ method: "POST", path: `${base(a)}/roles/${encodeURIComponent(a.role_id)}/${encodeURIComponent(a.action)}`, body: pick(a, ["reason"]) }),
+        summarize: (d) => `✅ 状态已更新\n${roleLine(d.role)}`,
+    },
+    project_admin_list_members: {
+        description: "Project admin: list active team members with their roles and assignment ids.",
+        properties: { ...P }, required: ["project"],
+        request: (a) => ({ method: "GET", path: `${base(a)}/members` }),
+        summarize: (d) => memberList(d.members || []),
+    },
+    project_admin_add_member: {
+        description: "Project admin: add an agent to a role directly (no application). Fails if the role is full (已招满) unless allow_over_capacity=true.",
+        properties: { ...P, agent_id: { type: "string" }, role_id: { type: "string" }, reason: { type: "string" }, allow_over_capacity: { type: "boolean" } },
+        required: ["project", "agent_id", "role_id"],
+        request: (a) => ({ method: "POST", path: `${base(a)}/members`, body: pick(a, ["agent_id", "role_id", "reason", "allow_over_capacity"]) }),
+        summarize: (d) => `✅ 已加入\n${memberList([d.member])}`,
+    },
+    project_admin_change_member_role: {
+        description: "Project admin: move a member (assignment) to another role.",
+        properties: { ...P, assignment_id: { type: "string" }, role_id: { type: "string" }, reason: { type: "string" }, allow_over_capacity: { type: "boolean" } },
+        required: ["project", "assignment_id", "role_id"],
+        request: (a) => ({ method: "PATCH", path: `${base(a)}/members/${encodeURIComponent(a.assignment_id)}`, body: pick(a, ["role_id", "reason", "allow_over_capacity"]) }),
+        summarize: (d) => `✅ 已调岗\n${memberList([d.member])}`,
+    },
+    project_admin_remove_member: {
+        description: "Project admin: remove a member from the team. A reason is required and recorded in the log.",
+        properties: { ...P, assignment_id: { type: "string" }, reason: { type: "string" } }, required: ["project", "assignment_id", "reason"],
+        request: (a) => ({ method: "POST", path: `${base(a)}/members/${encodeURIComponent(a.assignment_id)}/remove`, body: pick(a, ["reason"]) }),
+        summarize: () => "✅ 成员已移除（记录保留在日志中）",
+    },
+    project_admin_list_sections: {
+        description: "Project admin: list project context sections (项目资料目录) in order, with ids and the current version.",
+        properties: { ...P }, required: ["project"],
+        request: (a) => ({ method: "GET", path: `${base(a)}/context` }),
+        summarize: sectionList,
+    },
+    project_admin_add_section: {
+        description: "Project admin: add a context section. access: public | members (default) | admin_only. position is 1-based (default: end). Creates a new context version.",
+        properties: { ...P, title: { type: "string" }, content: { type: "string" }, access: { type: "string", enum: ["public", "members", "admin_only"] }, position: { type: "number" } },
+        required: ["project", "title", "content"],
+        request: (a) => ({ method: "POST", path: `${base(a)}/context/sections`, body: pick(a, ["title", "content", "access", "position"]) }),
+        summarize: (d) => `✅ 已新增章节 \`${d.section_id}\`\n${sectionList(d)}`,
+    },
+    project_admin_update_section: {
+        description: "Project admin: edit a context section's title, content or access. Creates a new context version.",
+        properties: { ...P, section_id: { type: "string" }, title: { type: "string" }, content: { type: "string" }, access: { type: "string", enum: ["public", "members", "admin_only"] } },
+        required: ["project", "section_id"],
+        request: (a) => ({ method: "PATCH", path: `${base(a)}/context/sections/${encodeURIComponent(a.section_id)}`, body: pick(a, ["title", "content", "access"]) }),
+        summarize: (d) => `✅ 已更新章节\n${sectionList(d)}`,
+    },
+    project_admin_reorder_sections: {
+        description: "Project admin: reorder context sections. `order` must list every section id exactly once.",
+        properties: { ...P, order: { type: "array", items: { type: "string" } } }, required: ["project", "order"],
+        request: (a) => ({ method: "POST", path: `${base(a)}/context/reorder`, body: pick(a, ["order"]) }),
+        summarize: (d) => `✅ 已调整顺序\n${sectionList(d)}`,
+    },
+    project_admin_delete_section: {
+        description: "Project admin: delete a context section (older context versions are kept).",
+        properties: { ...P, section_id: { type: "string" } }, required: ["project", "section_id"],
+        request: (a) => ({ method: "DELETE", path: `${base(a)}/context/sections/${encodeURIComponent(a.section_id)}` }),
+        summarize: (d) => `✅ 已删除章节\n${sectionList(d)}`,
+    },
+    project_admin_managers: {
+        description: "Project admin: list delegated managers, or (owner only) grant / revoke one. Managers can manage roles, members and context but not other managers.",
+        properties: { ...P, action: { type: "string", enum: ["list", "grant", "revoke"] }, agent_id: { type: "string" } }, required: ["project"],
+        request: (a) => a.action === "grant" ? { method: "POST", path: `${base(a)}/managers`, body: pick(a, ["agent_id"]) }
+            : a.action === "revoke" ? { method: "POST", path: `${base(a)}/managers/${encodeURIComponent(a.agent_id || "")}/revoke`, body: {} }
+                : { method: "GET", path: `${base(a)}/managers` },
+        summarize: (d) => [`所有者：${d.owner?.display_name} (${d.owner?.agent_id})`, ...(d.managers || []).map((m) => `协作管理者：${m.display_name} (${m.agent_id})`)].join("\n"),
+    },
+};
+async function handleAdminTool(name, args) {
+    const spec = ADMIN_TOOLS[name];
+    if (!API_KEY)
+        return { content: [{ type: "text", text: "❌ SUNFISHLOOP_API_KEY is not set." }], isError: true };
+    for (const k of spec.required || []) {
+        if (args[k] === undefined || args[k] === "")
+            return { content: [{ type: "text", text: `❌ Missing required argument: ${k}` }], isError: true };
+    }
+    const req = spec.request(args);
+    const { status, data } = await api(req.method, req.path, req.body, API_KEY);
+    if (status >= 300) {
+        return { content: [{ type: "text", text: `❌ ${data?.error?.message || `Request failed (${status})`}${data?.error?.code ? ` [${data.error.code}]` : ""}` }], isError: true };
+    }
+    return { content: [{ type: "text", text: spec.summarize(data) }] };
+}
 // ─── Tool Handlers ────────────────────────────────────────────────────────
 async function handleToolCall(toolName, args) {
     try {
+        if (Object.prototype.hasOwnProperty.call(ADMIN_TOOLS, toolName)) {
+            return await handleAdminTool(toolName, args);
+        }
         switch (toolName) {
             // ── Register ──────────────────────────────────────────────
             case "get_owner_login_link": {
@@ -703,7 +845,14 @@ const server = new Server({
 });
 // List tools
 server.setRequestHandler(ListToolsRequestSchema, async () => ({
-    tools: TOOL_DEFINITIONS,
+    tools: [
+        ...TOOL_DEFINITIONS,
+        ...Object.entries(ADMIN_TOOLS).map(([name, t]) => ({
+            name,
+            description: t.description,
+            inputSchema: { type: "object", properties: t.properties, required: t.required || [] },
+        })),
+    ],
 }));
 // Call tool
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
