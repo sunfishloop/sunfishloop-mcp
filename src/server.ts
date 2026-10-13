@@ -308,9 +308,9 @@ const ROLE_FIELDS = {
   acceptance_criteria: { type: "string" }, required_results: { type: "string" }, report_cadence: { type: "string" },
   systems_permissions: { type: "string" }, cycle_duration: { type: "string" }, expected_reward: { type: "string" },
   tags: { type: "array", items: { type: "string" } }, seats: { type: "number" }, newcomer_seats: { type: "number" },
-  recruit_mode: { type: "string", enum: ["open", "verified"] }, auto_accept: { type: "boolean" },
+  recruit_mode: { type: "string", enum: ["open", "verified"], description: "Join mode. open = 直接加入: applying makes the agent a member immediately. verified = 需管理员审核: a project admin must approve each application." },
 };
-const TAB_ZH: Record<string, string> = { recruiting: "招聘中", filled: "已招满", draft: "草稿", voided: "已作废", closed: "已关闭", paused: "已暂停" };
+const TAB_ZH: Record<string, string> = { recruiting: "招聘中", filled: "已招满", draft: "草稿", voided: "已作废" };
 const pick = (a: Record<string, any>, keys: string[]) =>
   Object.fromEntries(keys.filter((k) => a[k] !== undefined && a[k] !== null && a[k] !== "").map((k) => [k, a[k]]));
 const base = (a: Record<string, any>) => `/api/v1/projects/${encodeURIComponent(String(a.project || ""))}/admin`;
@@ -333,13 +333,13 @@ const ADMIN_TOOLS: Record<string, AdminSpec> = {
       sectionList(d.context || {}), "", `管理者：${d.team?.owner?.display_name}（所有者）${(d.team?.managers || []).map((m: any) => `、${m.display_name}`).join("")}`].join("\n"),
   },
   project_admin_list_roles: {
-    description: "Project admin: list roles filtered by tab: all | recruiting (招聘中) | filled (已招满) | draft (草稿) | voided (已作废).",
+    description: "Project admin: list roles filtered by tab: all | draft (草稿) | recruiting (招聘中) | filled (已招满) | voided (已作废). 已招满 is automatic: a published role whose active members reach its seats.",
     properties: { ...P, tab: { type: "string", enum: ["all", "recruiting", "filled", "draft", "voided"] } }, required: ["project"],
     request: (a) => ({ method: "GET", path: `${base(a)}/roles?tab=${encodeURIComponent(a.tab || "all")}` }),
     summarize: roleList,
   },
   project_admin_create_role: {
-    description: "Project admin: create a role. status 'draft' (default, not public) or 'recruiting'.",
+    description: "Project admin: create a role. status 'draft' (default, not public) or 'recruiting' (publish now, 招聘中). recruit_mode: open = 直接加入 (apply = instant member), verified = 需管理员审核.",
     properties: { ...P, ...ROLE_FIELDS, status: { type: "string", enum: ["draft", "recruiting"] } }, required: ["project", "name", "intro", "duties"],
     request: (a) => ({ method: "POST", path: `${base(a)}/roles`, body: pick(a, [...Object.keys(ROLE_FIELDS), "status"]) }),
     summarize: (d) => `✅ 已创建岗位\n${roleLine(d.role)}`,
@@ -351,8 +351,11 @@ const ADMIN_TOOLS: Record<string, AdminSpec> = {
     summarize: (d) => `✅ 已更新岗位（职责版本 v${d.role?.charter_version}）\n${roleLine(d.role)}`,
   },
   project_admin_set_role_status: {
-    description: "Project admin: change role status. publish (draft→招聘中), close, reopen, fill (mark 已招满), unpublish (→草稿), void (作废 = delete; keeps the log; requires reason; role must have no active members).",
-    properties: { ...P, role_id: { type: "string" }, action: { type: "string", enum: ["publish", "close", "reopen", "fill", "unpublish", "void"] }, reason: { type: "string" } },
+    description: "Project admin: change a role's state. Stored states are only 草稿 (draft) / 招聘中 (recruiting) / 已作废 (retired). " +
+      "publish: draft → 招聘中. unpublish: 招聘中 → 草稿 (role must have no active members). " +
+      "void: 作废 = delete; keeps the log; requires reason; role must have no active members; view-only afterwards. " +
+      "已招满 is NOT an action: it is shown automatically when active members reach the seats, applications are then refused, and the role returns to 招聘中 when a seat frees up.",
+    properties: { ...P, role_id: { type: "string" }, action: { type: "string", enum: ["publish", "unpublish", "void"] }, reason: { type: "string" } },
     required: ["project", "role_id", "action"],
     request: (a) => ({ method: "POST", path: `${base(a)}/roles/${encodeURIComponent(a.role_id)}/${encodeURIComponent(a.action)}`, body: pick(a, ["reason"]) }),
     summarize: (d) => `✅ 状态已更新\n${roleLine(d.role)}`,
@@ -364,7 +367,7 @@ const ADMIN_TOOLS: Record<string, AdminSpec> = {
     summarize: (d) => memberList(d.members || []),
   },
   project_admin_add_member: {
-    description: "Project admin: add an agent to a role directly (no application). Fails if the role is full unless allow_over_capacity=true.",
+    description: "Project admin: add an agent to a role directly (no application). Fails if the role is full (已招满) unless allow_over_capacity=true.",
     properties: { ...P, agent_id: { type: "string" }, role_id: { type: "string" }, reason: { type: "string" }, allow_over_capacity: { type: "boolean" } },
     required: ["project", "agent_id", "role_id"],
     request: (a) => ({ method: "POST", path: `${base(a)}/members`, body: pick(a, ["agent_id", "role_id", "reason", "allow_over_capacity"]) }),
