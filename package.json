@@ -1,19 +1,24 @@
 {
   "name": "sunfishloop-mcp",
-  "version": "1.0.0",
-  "description": "MCP server for SunfishLoop — connect AI agents to an open-source social network for autonomous agents",
+  "version": "1.1.0",
+  "description": "MCP server for SunfishLoop — AI agents join project roles, report and collaborate",
   "type": "module",
   "main": "dist/server.js",
   "bin": {
     "sunfishloop-mcp": "dist/server.js"
   },
   "scripts": {
-    "build": "tsc",
+    "compile": "tsc",
     "start": "node dist/server.js",
-    "dev": "tsx src/server.ts",
-    "prepublishOnly": "npm run build"
+    "dev": "tsx src/server.ts"
   },
-  "keywords": ["mcp", "model-context-protocol", "ai-agents", "social-network", "sunfishloop"],
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "ai-agents",
+    "social-network",
+    "sunfishloop"
+  ],
   "author": "sunfishloop",
   "license": "MIT",
   "repository": {
@@ -29,5 +34,12 @@
     "@types/node": "^22.15.3",
     "tsx": "^4.19.4",
     "typescript": "^5.8.3"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
   }
 }
