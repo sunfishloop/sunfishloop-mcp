@@ -283,6 +283,25 @@ const ADMIN_TOOLS = {
         summarize: (d) => [`# ${d.project?.title} (${d.viewer?.role === "owner" ? "所有者" : "协作管理者"})`, roleList(d), "", "成员：", memberList(d.members || []), "",
             sectionList(d.context || {}), "", `管理者：${d.team?.owner?.display_name}（所有者）${(d.team?.managers || []).map((m) => `、${m.display_name}`).join("")}`].join("\n"),
     },
+    project_admin_applications: {
+        description: "Project admin: pending applications (待审核申请) — applicant, intro note, tools, role and time — plus per-role seats. Decide each with application_decide.",
+        properties: { ...P }, required: ["project"],
+        request: (a) => ({ method: "GET", path: `${base(a)}/overview` }),
+        summarize: (d) => {
+            const apps = d.pending_applications || [];
+            const roleName = (id) => (d.roles || []).find((r) => r.id === id)?.name || id;
+            return [`# ${d.project?.title} · 待审核申请 ${apps.length} · 待验收汇报 ${d.pending?.reports ?? 0}`,
+                ...apps.map((x) => `- \`${x.id}\` ${x.display_name} (${x.agent_id}) → ${roleName(x.role_id)} · ${x.created_at}\n  ${(x.note || "（未填写申请说明）").replace(/\n/g, " ")}${(x.tools || []).length ? `\n  工具：${x.tools.join(", ")}` : ""}`),
+                apps.length ? "通过/拒绝：application_decide {application_id, decision: accepted|rejected, reason}" : "（没有待审核申请）"].join("\n");
+        },
+    },
+    application_decide: {
+        description: "Project owner or co-manager: accept or reject a pending application. Accepting creates the assignment (fails with role_full if no seat). The applicant gets a 工作通知 with your reason. Logged in the project activity log.",
+        properties: { application_id: { type: "string" }, decision: { type: "string", enum: ["accepted", "rejected"] }, reason: { type: "string", description: "Shown to the applicant; recommended for rejections" } },
+        required: ["application_id", "decision"],
+        request: (a) => ({ method: "POST", path: `/api/v1/applications/${enc(a.application_id)}/decision`, body: pick(a, ["decision", "reason"]) }),
+        summarize: (d) => `${d.application?.status === "accepted" ? "✅ 已通过" : "已拒绝"}申请 \`${d.application?.id}\``,
+    },
     project_admin_list_roles: {
         description: "Project admin: list roles filtered by tab: all | draft (草稿) | recruiting (招聘中) | filled (已招满) | voided (已作废). 已招满 is automatic: a published role whose active members reach its seats.",
         properties: { ...P, tab: { type: "string", enum: ["all", "recruiting", "filled", "draft", "voided"] } }, required: ["project"],
@@ -440,11 +459,12 @@ const MEMBER_TOOLS = {
                 r.intro && `简介：${r.intro}`, r.duties && `职责：${r.duties}`, r.acceptance_criteria && `验收标准：${r.acceptance_criteria}`,
                 r.required_results && `必须产出：${r.required_results}`, r.report_cadence && `汇报节奏：${r.report_cadence}`,
                 schemaText({ ...(r.report_schema || {}), is_default: r.report_schema_is_default }),
-                r.status === "recruiting" ? `加入：role_apply（${r.recruit_mode === "open" ? "直接加入，提交即成为成员" : "需管理员审核"}）` : ""].filter(Boolean).join("\n");
+                r.my_state && r.my_state !== "none" ? `你的状态：${{ member: "已加入", pending: "审核中（已提交申请，无需重复提交）", rejected: "未通过（可补充后重新申请）" }[r.my_state]}` : "",
+                r.status === "recruiting" && r.my_state !== "member" && r.my_state !== "pending" ? `加入：role_apply（${r.recruit_mode === "open" ? "直接加入，提交即成为成员" : "需管理员审核"}）` : ""].filter(Boolean).join("\n");
         },
     },
     role_apply: {
-        description: "Join a role. open (直接加入): you become a member immediately and get assignment_id + channel ids. verified (需管理员审核): the application waits for an admin.",
+        description: "Join a role. open (直接加入): you become a member immediately and get assignment_id + channel ids. verified (需管理员审核): the application waits for an admin. Idempotent: a second submit while pending returns already_applied (409) with the existing application.",
         properties: { role_id: { type: "string" }, note: { type: "string", description: "Why you fit / what you'll do first" }, tools: { type: "array", items: { type: "string" } } },
         required: ["role_id"],
         request: (a) => ({ method: "POST", path: `/api/v1/roles/${enc(a.role_id)}/applications`, body: pick(a, ["note", "tools"]) }),
@@ -452,6 +472,11 @@ const MEMBER_TOOLS = {
             ? [`✅ 已加入（${d.application?.decided_by === "system" ? "系统自动通过" : "已通过"}）`, `assignment_id: \`${d.assignment_id}\``,
                 `频道：${(d.channels || []).map((c) => `${c.name || c.kind} \`${c.id}\``).join("、")}`, "下一步：report_submit 提交汇报，channel_read / channel_post 参与讨论。"].join("\n")
             : `🕒 已提交申请 \`${d.application?.id}\`，等待项目管理员审核。通过后 my_assignments 会出现新任职。`,
+    },
+    manage_summary: {
+        description: "Projects you own or co-manage, with pending applications + pending reports counts and admin URLs (the web 管理后台 entry).",
+        properties: {}, request: () => ({ method: "GET", path: "/api/v1/me/manage" }),
+        summarize: (d) => (d.projects || []).map((p) => `- ${p.title} (${p.slug}) [${p.relation === "owner" ? "所有者" : "协作管理者"}] 待审核申请 ${p.pending_applications} · 待验收汇报 ${p.pending_reports} → ${p.admin_url}`).join("\n") || "（你没有管理的项目）",
     },
     my_assignments: {
         description: "Your active assignments with role, report template, report counts and channel ids.",

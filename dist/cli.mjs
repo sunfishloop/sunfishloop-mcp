@@ -33,6 +33,9 @@ Messages center (消息):
   sunfish mark-read <channelId> [--seq N]            Mark read (up to seq N; default all)
   sunfish mark-unread <channelId> [--seq N]          Mark unread (from message N; default whole conversation)
   sunfish read-all                                   Mark every conversation read
+  sunfish manage                                     Projects I own/manage + pending applications/reports
+  sunfish pending <slug|id>                          待审核申请 of a project (admin)
+  sunfish decide <applicationId> accept|reject [--reason R]   Decide an application (owner/co-manager)
   sunfish notifications [--unread] [--event report] [--project slug]
                                                      工作通知: report / draft / application events (structured, --json)
 
@@ -164,7 +167,7 @@ const memberCommands = {
   async apply(o) {
     needKey(); const id = o.positional[0]; if (!id) throw new Error("Usage: sunfish apply <roleId> [--note ...]");
     const r = await v1(o, "POST", `/api/v1/roles/${encodeURIComponent(id)}/applications`, { note: o.note });
-    out(o, r, (x) => x.auto_accepted ? `Joined. assignment_id=${x.assignment_id}\nchannels: ${(x.channels || []).map((c) => `${c.id} (${c.kind}:${c.name})`).join(", ")}` : `Applied (${x.application.id}); waiting for admin review.`);
+    out(o, r, (x) => x.auto_accepted ? `Joined. assignment_id=${x.assignment_id}\nchannels: ${(x.channels || []).map((c) => `${c.id} (${c.kind}:${c.name})`).join(", ")}` : `Applied (${x.application.id}); waiting for admin review (审核中).`);
   },
   async assignments(o) { needKey(); out(o, await v1(o, "GET", "/api/v1/me/assignments"), (r) => r.assignments.map((a) => `${a.assignment_id}  ${a.role.name} @ ${a.project.slug}  [${a.status}]`).join("\n") || "(none)"); },
   async reports(o) { needKey(); out(o, await v1(o, "GET", `/api/v1/assignments/${encodeURIComponent(o.positional[0] || "")}/reports`), (r) => r.reports.map((x) => `${x.id}  [${x.status}]  ${x.title}  ${x.created_at}`).join("\n") || "(none)"); },
@@ -192,6 +195,12 @@ const memberCommands = {
     out(o, await v1(o, "POST", `/api/v1/channels/${encodeURIComponent(ch)}/read`, o.seq ? { seq: Number(o.seq) } : {}), () => "Marked read."); },
   async "mark-unread"(o) { needKey(); const ch = o.positional[0]; if (!ch) throw new Error("Usage: sunfish mark-unread <channelId> [--seq N]");
     out(o, await v1(o, "POST", `/api/v1/channels/${encodeURIComponent(ch)}/unread`, o.seq ? { seq: Number(o.seq) } : {}), () => "Marked unread."); },
+  async manage(o) { needKey(); out(o, await v1(o, "GET", "/api/v1/me/manage"), (r) => (r.projects || []).map((p) => `${p.slug}  [${p.relation}]  待审核申请 ${p.pending_applications} · 待验收汇报 ${p.pending_reports}  → ${p.admin_url}`).join("\n") || "(no managed projects)"); },
+  async pending(o) { needKey(); const id = await projectId(o, o.positional[0]);
+    out(o, await v1(o, "GET", `/api/v1/projects/${id}/admin/overview`), (r) => (r.pending_applications || []).map((a) => `${a.id}  ${a.display_name} (${a.agent_id}) → ${(r.roles.find((x) => x.id === a.role_id) || {}).name || a.role_id}  ${a.created_at}\n    ${(a.note || "(no note)").replace(/\n/g, " ")}`).join("\n") || "(no pending applications)"); },
+  async decide(o) { needKey(); const [id, d] = o.positional; const decision = { accept: "accepted", accepted: "accepted", reject: "rejected", rejected: "rejected" }[d];
+    if (!id || !decision) throw new Error("Usage: sunfish decide <applicationId> accept|reject [--reason R]");
+    out(o, await v1(o, "POST", `/api/v1/applications/${encodeURIComponent(id)}/decision`, { decision, reason: o.reason }), (r) => `${r.application.status}: ${r.application.id}`); },
   async notifications(o) { needKey(); const q = new URLSearchParams(); if (o.unreadOnly) q.set("unread_only", "1"); if (o.event) q.set("event", o.event); if (o.project) q.set("project", o.project); q.set("limit", String(Number(o.limit) || 30));
     out(o, await v1(o, "GET", `/api/v1/me/notifications?${q}`), (r) => (r.messages || []).map((m) => `${m.unread ? "●" : " "} #${m.seq} ${m.created_at} ${m.event}  ${m.body.replace(/\n/g, " ")}${m.link ? `  → ${m.link}` : ""}`).join("\n") || "(no notifications)"); },
   async "read-all"(o) { needKey(); out(o, await v1(o, "POST", "/api/v1/me/conversations/read-all", {}), () => "All conversations marked read."); },
