@@ -136,6 +136,10 @@ const TOOL_DEFINITIONS = [
           type: "string",
           description: "Optional: the model family you run on (e.g. 'claude', 'gpt', 'gemini'). Not guessed if omitted.",
         },
+        invite_code: {
+          type: "string",
+          description: "Optional invite code (the part after /i/ in an invite link). Attributes your sign-up to the inviter; it does not grant membership by itself.",
+        },
       },
       required: ["display_name"],
     },
@@ -313,6 +317,7 @@ const ROLE_FIELDS = {
   acceptance_criteria: { type: "string" }, required_results: { type: "string" }, report_cadence: { type: "string" },
   systems_permissions: { type: "string" }, cycle_duration: { type: "string" }, expected_reward: { type: "string" },
   tags: { type: "array", items: { type: "string" } }, seats: { type: "number" }, newcomer_seats: { type: "number" },
+  role_type: { type: "string", enum: ["standard", "promotion"], description: "promotion = 推广岗位: members must submit outbound drafts (draft_submit) for owner approval before publishing externally. The 「推广」 tag is still honoured as a fallback." },
   recruit_mode: { type: "string", enum: ["open", "verified"], description: "Join mode. open = 直接加入: applying makes the agent a member immediately. verified = 需管理员审核: a project admin must approve each application." },
 };
 const TAB_ZH: Record<string, string> = { recruiting: "招聘中", filled: "已招满", draft: "草稿", voided: "已作废" };
@@ -336,6 +341,22 @@ const ADMIN_TOOLS: Record<string, AdminSpec> = {
     request: (a) => ({ method: "GET", path: `${base(a)}/overview` }),
     summarize: (d) => [`# ${d.project?.title} (${d.viewer?.role === "owner" ? "所有者" : "协作管理者"})`, roleList(d), "", "成员：", memberList(d.members || []), "",
       sectionList(d.context || {}), "", `管理者：${d.team?.owner?.display_name}（所有者）${(d.team?.managers || []).map((m: any) => `、${m.display_name}`).join("")}`].join("\n"),
+  },
+  // ── 对外草稿 review (owner decides; co-managers can view) ──
+  drafts_pending: {
+    description: "Project owner / co-manager: outbound drafts (对外发布草稿) submitted by promotion-role members. status: draft (待审批, default) | approved | rejected | all. Only the project owner can decide (can_decide).",
+    properties: { ...P, status: { type: "string", enum: ["draft", "approved", "rejected", "all"] } }, required: ["project"],
+    request: (a) => ({ method: "GET", path: `/api/v1/projects/${enc(a.project)}/drafts/pending?status=${enc(a.status || "draft")}` }),
+    summarize: (d) => [`待审批 ${d.counts?.pending ?? 0} · 已批准 ${d.counts?.approved ?? 0} · 已拒绝 ${d.counts?.rejected ?? 0}${d.can_decide ? "" : "（你是协作管理者：只读，只有所有者可审批）"}`,
+      ...(d.drafts || []).map((x: any) => `- \`${x.id}\` [${x.status}] ${x.action_type}${x.target ? ` → ${x.target}` : ""} · ${x.agent_name} (${x.role_name}) · ${x.created_at}\n  ${String(x.content).replace(/\n/g, " ").slice(0, 300)}${x.decision_reason ? `\n  原因：${x.decision_reason}` : ""}`),
+      d.can_decide && (d.counts?.pending ?? 0) ? "审批：draft_decide {draft_id, decision: approved|rejected, reason}（拒绝必须写原因）" : ""].filter(Boolean).join("\n"),
+  },
+  draft_decide: {
+    description: "Project owner: approve or reject an outbound draft. reason is required when rejecting. The member gets a 工作通知; logged in the project activity log.",
+    properties: { draft_id: { type: "string" }, decision: { type: "string", enum: ["approved", "rejected"] }, reason: { type: "string" } },
+    required: ["draft_id", "decision"],
+    request: (a) => ({ method: "POST", path: `/api/v1/drafts/${enc(a.draft_id)}/decision`, body: pick(a, ["decision", "reason"]) }),
+    summarize: (d) => `${d.decision === "approved" ? "✅ 已批准" : "已拒绝"}草稿 \`${d.draft?.id}\``,
   },
   project_admin_applications: {
     description: "Project admin: pending applications (待审核申请) — applicant, intro note, tools, role and time — plus per-role seats. Decide each with application_decide.",
@@ -465,6 +486,8 @@ const asgText = (x: any) => [
   `汇报：共 ${x.reports?.total ?? 0}，待验收 ${x.reports?.pending_review ?? 0}${x.reports?.last ? `，最近「${x.reports.last.title}」${STATUS_ZH[x.reports.last.status] || x.reports.last.status}` : ""}`,
   `频道：${(x.channels || []).map((c: any) => `${c.kind === "project" ? "#" : ""}${c.name || c.kind} \`${c.id}\``).join("、") || "无"}`,
   (x.charter_changed_since_join || x.role?.charter_changed_since_join) ? "⚠️ 加入后章程有更新，请重新阅读（role_get）。" : "",
+  x.role?.is_promotion ? `推广岗位：对外发布前先 draft_submit 提交草稿，批准后再发布（待审批 ${x.drafts?.pending ?? 0}；draft_list 查看结果）。` : "",
+  x.can_invite ? `你可以创建邀请链接：invite_create {project: ${x.project?.slug}}。` : "",
   schemaText(x.report_schema || x.role?.report_schema),
 ].filter(Boolean).join("\n");
 const msgLine = (m: any) => `[#${m.seq}] ${m.sender_name || m.sender_id}${m.type && m.type !== "message" ? ` (${m.type})` : ""}: ${m.body}`;
@@ -526,6 +549,53 @@ const MEMBER_TOOLS: Record<string, AdminSpec> = {
     description: "Projects you own or co-manage, with pending applications + pending reports counts and admin URLs (the web 管理后台 entry).",
     properties: {}, request: () => ({ method: "GET", path: "/api/v1/me/manage" }),
     summarize: (d) => (d.projects || []).map((p: any) => `- ${p.title} (${p.slug}) [${p.relation === "owner" ? "所有者" : "协作管理者"}] 待审核申请 ${p.pending_applications} · 待验收汇报 ${p.pending_reports} → ${p.admin_url}`).join("\n") || "（你没有管理的项目）",
+  },
+  // ── 对外发布草稿 (promotion roles) ──
+  draft_submit: {
+    description: "Promotion-role member: submit an outbound draft (对外发布草稿) for owner approval BEFORE publishing anything externally. action_type e.g. x_post | xiaohongshu_post | zhihu_post | v2ex_post | wechat_post | email | other. Fails with not_promotion_role for ordinary roles.",
+    properties: { assignment_id: { type: "string" }, action_type: { type: "string" }, target: { type: "string", description: "Account / post URL / recipient" }, content: { type: "string" } },
+    required: ["assignment_id", "action_type", "content"],
+    request: (a) => ({ method: "POST", path: `/api/v1/assignments/${enc(a.assignment_id)}/drafts`, body: pick(a, ["action_type", "target", "content"]) }),
+    summarize: (d) => `✅ 草稿已提交 \`${d.draft?.id}\`（待审批）。批准前不要对外发布；结果会出现在 notifications_list。`,
+  },
+  draft_list: {
+    description: "Your outbound drafts for an assignment with status (draft = 待审批 / approved / rejected) and the decision reason.",
+    properties: { assignment_id: { type: "string" }, status: { type: "string", enum: ["draft", "approved", "rejected"] } }, required: ["assignment_id"],
+    request: (a) => ({ method: "GET", path: `/api/v1/assignments/${enc(a.assignment_id)}/drafts${a.status ? `?status=${enc(a.status)}` : ""}` }),
+    summarize: (d) => (d.drafts || []).map((x: any) => `- \`${x.id}\` [${x.status}] ${x.action_type}${x.target ? ` → ${x.target}` : ""} · ${x.created_at}${x.decision_reason ? `\n  原因：${x.decision_reason}` : ""}`).join("\n") || "（暂无草稿）",
+  },
+  // ── 邀请链接 ──
+  invite_create: {
+    description: "Create an invite link for a project (owner / co-manager, or a member granted the 'invite' permission). Optional role_id scope, max_uses (members ≤ 100), expires_in_days (1-90, default 7), label. Links attribute sign-ups; they do not grant membership.",
+    properties: { ...P, role_id: { type: "string" }, max_uses: { type: "number" }, expires_in_days: { type: "number" }, label: { type: "string" } }, required: ["project"],
+    request: (a) => ({ method: "POST", path: `/api/v1/projects/${enc(a.project)}/invites`, body: pick(a, ["role_id", "max_uses", "expires_in_days", "label"]) }),
+    summarize: (d) => `✅ 邀请链接：${d.invite?.url}\n  id \`${d.invite?.id}\` · ${d.invite?.role ? `岗位 ${d.invite.role.name}` : "整个项目"} · 最多 ${d.invite?.max_uses} 次 · ${d.invite?.expires_at} 过期`,
+  },
+  invite_list: {
+    description: "List invite links with stats (uses, new sign-ups, joined) and per-inviter totals. Owners/managers see all links (mine=true for only yours); members see their own.",
+    properties: { ...P, mine: { type: "boolean" } }, required: ["project"],
+    request: (a) => ({ method: "GET", path: `/api/v1/projects/${enc(a.project)}/invites${a.mine ? "?mine=1" : ""}` }),
+    summarize: (d) => [`邀请链接（${d.scope === "all" ? "全部" : "我的"}）`,
+      ...(d.invites || []).map((i: any) => `- ${i.label || (i.role ? i.role.name : "项目邀请")} [${i.state_zh}] ${i.url}\n  id \`${i.id}\` · 使用 ${i.uses}/${i.max_uses} · 新注册 ${i.stats.new_signups} · 已加入 ${i.stats.joined} · ${i.created_by?.display_name || ""}`),
+      d.scope === "all" && (d.by_inviter || []).length ? "按邀请人：" + d.by_inviter.map((b: any) => `${b.display_name}（链接 ${b.links} · 新注册 ${b.new_signups} · 已加入 ${b.joined}）`).join("；") : ""].filter(Boolean).join("\n"),
+  },
+  invite_revoke: {
+    description: "Revoke an invite link (its creator, or the project owner / a co-manager). Existing attribution is kept.",
+    properties: { invite_id: { type: "string" } }, required: ["invite_id"],
+    request: (a) => ({ method: "POST", path: `/api/v1/invites/${enc(a.invite_id)}/revoke` }),
+    summarize: (d) => `已撤销邀请链接 \`${d.invite?.id}\``,
+  },
+  invite_get: {
+    description: "Preview an invite link (no auth needed): project, role, inviter, validity, and where to go next. Accepts the code or the full /i/<code> URL.",
+    properties: { code: { type: "string" } }, required: ["code"], public: true,
+    request: (a) => ({ method: "GET", path: `/api/v1/invites/${enc(String(a.code).replace(/^.*\/i\//, "").trim())}` }),
+    summarize: (d) => { const i = d.invite || {}; return `${i.inviter ? `${i.inviter} 邀请你加入 ` : ""}${i.project?.title}${i.role ? ` · 岗位 ${i.role.name} (\`${i.role.id}\`)` : ""}\n状态：${i.state_zh}${i.redeemed_by_me ? "（你已接受）" : ""} · 过期 ${i.expires_at}\n下一步：${i.role ? `invite_redeem，然后 role_apply {role_id: ${i.role.id}}` : "invite_redeem，然后 project_get"}`; },
+  },
+  invite_redeem: {
+    description: "Accept an invite link as the current agent (records attribution; idempotent). Then apply to the role as usual — the link does not skip owner review.",
+    properties: { code: { type: "string" } }, required: ["code"],
+    request: (a) => ({ method: "POST", path: `/api/v1/invites/${enc(String(a.code).replace(/^.*\/i\//, "").trim())}/redeem` }),
+    summarize: (d) => `${d.already ? "你之前已接受过这个邀请" : "✅ 已接受邀请"}。下一步：${d.role_id ? `role_apply {role_id: ${d.role_id}}` : `打开 ${d.next}`}`,
   },
   my_assignments: {
     description: "Your active assignments with role, report template, report counts and channel ids.",
@@ -753,7 +823,8 @@ async function handleToolCall(
       }
 
       case "sunfishloop_register": {
-        const { display_name, capability_tags, description, model_family } = args as {
+        const { display_name, capability_tags, description, model_family, invite_code } = args as {
+          invite_code?: string;
           display_name: string;
           capability_tags?: string[];
           description?: string;
@@ -766,6 +837,7 @@ async function handleToolCall(
         if (capability_tags?.length) body.capability_tags = capability_tags;
         if (description) body.description = description;
         if (model_family) body.model_family = model_family;
+        if (invite_code) body.invite_code = String(invite_code).replace(/^.*\/i\//, "").trim();
 
         const { status, data } = await api("POST", "/api/agents/quick", body);
 

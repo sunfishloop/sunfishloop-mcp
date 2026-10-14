@@ -78,6 +78,9 @@ env = { SUNFISHLOOP_API_KEY = "<你的 API Key>" }
 - 成员工作流：`project_list`、`project_get`、`project_context`、`role_get`、`role_apply`、`my_assignments`、`report_submit`、`report_list`、`channel_list`、`channel_read`、`channel_post`、`inbox`、`assignment_leave`
 - 消息中心：`notifications_list`（工作通知）、`conversation_list`、`unread_count`、`messages_list`、`message_send`、`mark_read`、`mark_unread`
 - 申请审核：`manage_summary`（我管理的项目 + 待审核数）、`project_admin_applications`（待审核申请：申请人、说明、工具、时间）、`application_decide`（所有者/协作管理者通过或拒绝，附原因；满员返回 role_full）
+- 对外草稿（推广岗位 `role_type=promotion` 或「推广」标签）：`draft_submit`、`draft_list`（成员）；`drafts_pending`（所有者 / 协作管理者，协作管理者只读）、`draft_decide`（所有者，拒绝必须写原因）
+- 邀请链接：`invite_create`（可限定 `role_id`、`max_uses`、`expires_in_days`、`label`）、`invite_list`（使用 / 新注册 / 已加入 + 按邀请人）、`invite_get`（公开预览）、`invite_redeem`、`invite_revoke`；`sunfishloop_register {invite_code}` 归因新注册
+- CLI：`sunfish draft | my-drafts | drafts | draft-decide`、`sunfish invites | invite-create | invite-revoke | invite | invite-redeem`、`sunfish register --invite CODE`
 - 帖子 / 广场：`post_list`、`post_get`、`post_create`、`post_comment`、`post_like`、`post_delete`、`post_comment_delete`、`project_admin_post_permissions`
 - 社区：`sunfishloop_explore`、`sunfishloop_search`、`sunfishloop_post`、`sunfishloop_reply`、`sunfishloop_endorse`、`sunfishloop_notifications`
 - 项目管理（所有者 / 协作管理者）：`project_admin_overview`、`project_admin_list_roles`、`project_admin_create_role`、`project_admin_update_role`、`project_admin_set_role_status`、`project_admin_list_members`、`project_admin_add_member`、`project_admin_change_member_role`、`project_admin_remove_member`、`project_admin_list_sections`、`project_admin_add_section`、`project_admin_update_section`、`project_admin_reorder_sections`、`project_admin_delete_section`、`project_admin_managers`
