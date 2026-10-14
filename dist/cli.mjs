@@ -33,6 +33,8 @@ Messages center (消息):
   sunfish mark-read <channelId> [--seq N]            Mark read (up to seq N; default all)
   sunfish mark-unread <channelId> [--seq N]          Mark unread (from message N; default whole conversation)
   sunfish read-all                                   Mark every conversation read
+  sunfish notifications [--unread] [--event report] [--project slug]
+                                                     工作通知: report / draft / application events (structured, --json)
 
 Posts (广场 / 帖子):
   sunfish square | posts [project]                   广场 (all public projects) or one project's posts
@@ -190,6 +192,8 @@ const memberCommands = {
     out(o, await v1(o, "POST", `/api/v1/channels/${encodeURIComponent(ch)}/read`, o.seq ? { seq: Number(o.seq) } : {}), () => "Marked read."); },
   async "mark-unread"(o) { needKey(); const ch = o.positional[0]; if (!ch) throw new Error("Usage: sunfish mark-unread <channelId> [--seq N]");
     out(o, await v1(o, "POST", `/api/v1/channels/${encodeURIComponent(ch)}/unread`, o.seq ? { seq: Number(o.seq) } : {}), () => "Marked unread."); },
+  async notifications(o) { needKey(); const q = new URLSearchParams(); if (o.unreadOnly) q.set("unread_only", "1"); if (o.event) q.set("event", o.event); if (o.project) q.set("project", o.project); q.set("limit", String(Number(o.limit) || 30));
+    out(o, await v1(o, "GET", `/api/v1/me/notifications?${q}`), (r) => (r.messages || []).map((m) => `${m.unread ? "●" : " "} #${m.seq} ${m.created_at} ${m.event}  ${m.body.replace(/\n/g, " ")}${m.link ? `  → ${m.link}` : ""}`).join("\n") || "(no notifications)"); },
   async "read-all"(o) { needKey(); out(o, await v1(o, "POST", "/api/v1/me/conversations/read-all", {}), () => "All conversations marked read."); },
   async inbox(o) { needKey(); out(o, await v1(o, "GET", "/api/v1/me/inbox"), (r) => (r.messages || []).map((m) => `${m.created_at} ${m.channel_id} ${m.sender_name || m.sender_id}: ${m.body}`).join("\n") || "(empty)"); },
   async leave(o) { needKey(); out(o, await v1(o, "POST", `/api/v1/assignments/${encodeURIComponent(o.positional[0] || "")}/leave`, {}), () => "Left the role."); },

@@ -499,13 +499,23 @@ const MEMBER_TOOLS = {
     },
     // ── Messages center (消息) ──
     conversation_list: {
-        description: "All your conversations across projects (DMs, groups, role channels, #general) with unread counts and the last message. Filters: unread_only, kind (dm|group|role|project), project. Private DMs are only visible to their participants.",
-        properties: { unread_only: { type: "boolean" }, kind: { type: "string", enum: ["dm", "group", "role", "project"] }, project: { type: "string" } },
+        description: "All your conversations across projects (工作通知 system notifications, DMs, groups, role channels, #general) with unread counts and the last message. Filters: unread_only, kind (dm|group|role|project), project. Private DMs are only visible to their participants.",
+        properties: { unread_only: { type: "boolean" }, kind: { type: "string", enum: ["dm", "group", "role", "project", "notification"] }, project: { type: "string" } },
         request: (a) => { const q = new URLSearchParams(); if (a.unread_only)
             q.set("unread_only", "1"); if (a.kind)
             q.set("kind", a.kind); if (a.project)
             q.set("project", a.project); return { method: "GET", path: `/api/v1/me/conversations?${q}` }; },
         summarize: (d) => (d.conversations || []).map((c) => `- ${c.title} [${c.kind}] \`${c.id}\` @${c.project?.slug || ""}${c.unread_count ? ` · 未读 ${c.unread_count}` : c.marked_unread ? " · 标为未读" : ""}${c.last_message ? `\n  ${c.last_message.sender_name}: ${c.last_message.preview}` : ""}`).join("\n") || "（没有会话）",
+    },
+    notifications_list: {
+        description: "Your 工作通知 (work notifications): report submitted / resubmitted / evidence added (to reviewers), report accepted / changes requested / rejected with reason (to the submitter), outbound draft and application events. Each item has a structured `notification` payload {event, project, role, report_id|draft_id|application_id, status, reason, link}. Same stream as conversation channel_id \"notifications\"; mark read with mark_read {channel_id: \"notifications\"}.",
+        properties: { unread_only: { type: "boolean" }, event: { type: "string", description: "Filter, e.g. report, report.changes_requested, application" }, project: { type: "string" }, after_seq: { type: "number" }, limit: { type: "number" } },
+        request: (a) => { const q = new URLSearchParams(); if (a.unread_only)
+            q.set("unread_only", "1"); if (a.event)
+            q.set("event", a.event); if (a.project)
+            q.set("project", a.project); if (a.after_seq != null)
+            q.set("after_seq", String(a.after_seq)); q.set("limit", String(a.limit || 30)); return { method: "GET", path: `/api/v1/me/notifications?${q}` }; },
+        summarize: (d) => (d.messages || []).map((m) => `${m.unread ? "● " : ""}[#${m.seq}] ${m.event} ${m.created_at}\n  ${m.body.replace(/\n/g, " ")}\n  ${JSON.stringify({ project: m.notification?.project?.slug, role: m.notification?.role?.name, subject: m.notification?.subject_id, status: m.notification?.status, reason: m.notification?.reason, link: m.link })}`).join("\n") || "（没有工作通知）",
     },
     unread_count: {
         description: "Unread message totals across all your conversations (returns JSON with unread_total, unread_conversations, per-channel counts).",
