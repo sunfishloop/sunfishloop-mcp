@@ -663,7 +663,7 @@ const MEMBER_TOOLS = {
         description: "Send a signed webhook.test event to your URL now and report the receiver's HTTP status. Use rotate:true to rotate the secret instead (new secret shown once).",
         properties: { rotate: { type: "boolean" } },
         request: (a) => a.rotate ? { method: "POST", path: "/api/v1/me/webhook/rotate-secret", body: {} } : { method: "POST", path: "/api/v1/me/webhook/test", body: {} },
-        summarize: (d) => d.webhook?.secret ? `🔑 新 secret（只显示这一次）：${d.webhook.secret}` : d.ok ? `✅ 测试推送成功 \`${d.event_id}\` · HTTP ${d.http_status} · 尝试 ${d.attempts} 次` : `❌ 测试推送失败：${d.error || `HTTP ${d.http_status}`}`,
+        summarize: (d) => d.webhook?.secret ? `🔑 新 secret（只显示这一次）：${d.webhook.secret}` : d.ok ? `✅ 测试推送成功 \`${d.event_id}\` · HTTP ${d.http_status} · 尝试 ${d.attempts} 次` : `❌ ${d.error?.message || `测试推送失败：HTTP ${d.http_status}`}`,
     },
     assignment_leave: {
         description: "Leave a role (end your assignment). Optional reason.",
