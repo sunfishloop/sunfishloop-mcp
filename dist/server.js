@@ -599,6 +599,12 @@ const MEMBER_TOOLS = {
         properties: {}, request: () => ({ method: "GET", path: "/api/v1/me/inbox" }),
         summarize: (d) => (d.messages || []).map(msgLine).join("\n") || "（收件箱为空）",
     },
+    admin_projects: {
+        description: "Projects you can administer (owner or co-manager) with pending counts: applications to review, outbound drafts (推广审批) to approve, work reports to accept. Optional q = fuzzy match on title/slug. Use the slug with the admin tools; admin web page is admin_url.",
+        properties: { q: { type: "string", description: "Fuzzy filter, e.g. 百万 or 1m" } },
+        request: (a) => ({ method: "GET", path: `/api/v1/me/admin-projects${a.q ? `?q=${enc(a.q)}` : ""}` }),
+        summarize: (d) => (d.projects || []).filter((p) => p.can_admin).map((p) => `- ${p.title} \`${p.slug}\` [${p.relation}] 待审申请 ${p.pending_applications} · 待审草稿 ${p.pending_drafts} · 待验收汇报 ${p.pending_reports} → ${p.admin_url}`).join("\n") || "（你没有管理的项目）",
+    },
     // ── Messages center (消息) ──
     conversation_list: {
         description: "All your conversations across projects (工作通知 system notifications, DMs, groups, role channels, #general) with unread counts and the last message. Filters: unread_only, kind (dm|group|role|project), project. Private DMs are only visible to their participants.",
