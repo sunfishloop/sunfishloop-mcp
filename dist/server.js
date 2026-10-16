@@ -643,16 +643,17 @@ const MEMBER_TOOLS = {
     },
     // ── Member webhook (实时推送) ──
     webhook_set: {
-        description: "Register or update YOUR real-time webhook (PUT /api/v1/me/webhook). Pushes only what you could poll yourself: notification.<event> (your 工作通知), message.dm, message.channel, message.mention. url must be https (DNS-checked; private/loopback addresses refused). First registration and rotate_secret:true return the signing secret ONCE — store it. events: exact types or prefixes like notification.*, null = all. project_ids: limit to these projects. enabled:true re-enables after auto-disable. Verify X-Sunfish-Signature: t=<unix>,v1=hex(HMAC-SHA256(secret, `${t}.${raw_body}`)). Polling stays the fallback.",
-        properties: { url: { type: "string" }, events: { type: "array", items: { type: "string" } }, project_ids: { type: "array", items: { type: "string" } }, enabled: { type: "boolean" }, rotate_secret: { type: "boolean" } },
-        request: (a) => ({ method: "PUT", path: "/api/v1/me/webhook", body: pick(a, ["url", "events", "project_ids", "enabled", "rotate_secret"]) }),
-        summarize: (d) => `✅ Webhook ${d.created ? "已注册" : "已更新"}：${d.webhook?.url} · ${d.webhook?.enabled ? "启用" : `停用（${d.webhook?.disabled_reason || ""}）`} · 事件 ${(d.webhook?.events || ["全部"]).join(", ")}${d.webhook?.secret ? `\n🔑 secret（只显示这一次，请立即保存）：${d.webhook.secret}` : ""}\n签名：${d.webhook?.signature}`,
+        description: "Register or update YOUR real-time webhook (PUT /api/v1/me/webhook). Pushes only what you could poll yourself: notification.<event> (your 工作通知), message.dm, message.channel, message.mention. url must be https (DNS-checked; private/loopback addresses refused). First registration and rotate_secret:true return the signing secret ONCE — store it. events: exact types or prefixes like notification.*, null = all. project_ids: limit to these projects. enabled:true re-enables after auto-disable. auth_header: {name, value} — optional header sent on EVERY delivery incl. test, for receivers that require a key header (e.g. name Authorization, value Bearer <receiver key>); name must be Authorization or X-*; value is encrypted and never shown again; null removes it. Verify X-Sunfish-Signature: t=<unix>,v1=hex(HMAC-SHA256(secret, `${t}.${raw_body}`)). Polling stays the fallback.",
+        properties: { url: { type: "string" }, events: { type: "array", items: { type: "string" } }, project_ids: { type: "array", items: { type: "string" } }, enabled: { type: "boolean" }, rotate_secret: { type: "boolean" },
+            auth_header: { type: ["object", "null"], properties: { name: { type: "string" }, value: { type: "string" } }, required: ["name", "value"], description: "Custom auth header sent with every push, e.g. {name:\"Authorization\", value:\"Bearer xxx\"}; null removes it" } },
+        request: (a) => ({ method: "PUT", path: "/api/v1/me/webhook", body: pick(a, ["url", "events", "project_ids", "enabled", "rotate_secret", "auth_header"]) }),
+        summarize: (d) => `✅ Webhook ${d.created ? "已注册" : "已更新"}：${d.webhook?.url} · ${d.webhook?.enabled ? "启用" : `停用（${d.webhook?.disabled_reason || ""}）`} · 事件 ${(d.webhook?.events || ["全部"]).join(", ")}${d.webhook?.auth_header ? ` · 认证头 ${d.webhook.auth_header.name}: ${d.webhook.auth_header.value}` : ""}${d.webhook?.secret ? `\n🔑 secret（只显示这一次，请立即保存）：${d.webhook.secret}` : ""}\n签名：${d.webhook?.signature}`,
     },
     webhook_get: {
         description: "Show your webhook config (no secret, only its prefix), failure count and disabled reason. Delivery log: GET /api/v1/me/webhook/deliveries (CLI: sunfish webhook deliveries).",
         properties: {},
         request: () => ({ method: "GET", path: "/api/v1/me/webhook" }),
-        summarize: (d) => d.webhook ? `${d.webhook.url} · ${d.webhook.enabled ? "启用" : `停用（${d.webhook.disabled_reason || ""}）`} · 事件 ${(d.webhook.events || ["全部"]).join(", ")} · 项目 ${(d.webhook.project_ids || ["全部"]).join(", ")}\nsecret ${d.webhook.secret_prefix} · 连续失败 ${d.webhook.consecutive_failures} · 最近成功 ${d.webhook.last_success_at || "—"}` : `（未注册 webhook；用 webhook_set 注册，或轮询 ${(d.polling_fallback || []).join(" + ")}）`,
+        summarize: (d) => d.webhook ? `${d.webhook.url} · ${d.webhook.enabled ? "启用" : `停用（${d.webhook.disabled_reason || ""}）`} · 事件 ${(d.webhook.events || ["全部"]).join(", ")} · 项目 ${(d.webhook.project_ids || ["全部"]).join(", ")}\n${d.webhook.auth_header ? `认证头 ${d.webhook.auth_header.name}: ${d.webhook.auth_header.value} · ` : ""}secret ${d.webhook.secret_prefix} · 连续失败 ${d.webhook.consecutive_failures} · 最近成功 ${d.webhook.last_success_at || "—"}` : `（未注册 webhook；用 webhook_set 注册，或轮询 ${(d.polling_fallback || []).join(" + ")}）`,
     },
     webhook_delete: {
         description: "Delete your webhook (you go back to polling notifications_list / unread_count).",
@@ -749,7 +750,9 @@ async function handleAdminTool(name, args) {
     const { status, data } = await api(req.method, req.path, req.body, API_KEY);
     if (status >= 300) {
         const fieldErrs = Array.isArray(data?.error?.fields) ? "\n" + data.error.fields.map((f) => `  - ${f.key}: ${f.message}`).join("\n") : "";
-        return { content: [{ type: "text", text: `❌ ${data?.error?.message || `Request failed (${status})`}${data?.error?.code ? ` [${data.error.code}]` : ""}${fieldErrs}` }], isError: true };
+        const e = typeof data?.error === "string" ? { code: data.error, message: data.message } : (data?.error || {});
+        const recv = data?.receiver_status !== undefined && data?.receiver_status !== null ? `\n接收端 HTTP ${data.receiver_status}${data.receiver_body ? `：${data.receiver_body}` : ""} · 尝试 ${data.attempts} 次${data.hint ? `\n💡 ${data.hint}` : ""}` : "";
+        return { content: [{ type: "text", text: `❌ ${e.message || `Request failed (${status})`}${e.code ? ` [${e.code}]` : ""}${fieldErrs}${recv}` }], isError: true };
     }
     let text = spec.summarize(data);
     if (name === "report_submit")

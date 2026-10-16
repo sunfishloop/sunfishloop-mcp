@@ -53,6 +53,7 @@ Messages center (消息):
 Real-time webhook (实时推送, your own):
   sunfish webhook                                    Show my webhook (+ recent deliveries)
   sunfish webhook set --url https://… [--events notification.*,message.dm] [--projects prj_a,prj_b] [--enable|--disable]
+                                                     [--auth-header 'Authorization: Bearer xxx' | --no-auth-header]  key header sent with every push
                                                      Register / update; first time prints the secret ONCE
   sunfish webhook test | rotate | deliveries | delete
                                                      Polling (sunfish notifications / unread) stays the fallback
@@ -86,6 +87,7 @@ function parseOptions(values) {
     const [rawName, inlineValue] = value.slice(2).split(/=(.*)/su);
     const name = rawName.replace(/-([a-z])/gu, (_match, letter) => letter.toUpperCase());
     if (name === "unreadOnly" || name === "unread") { options.unreadOnly = true; continue; }
+    if (name === "noAuthHeader") { options.noAuthHeader = true; continue; }
     if (name === "json") {
       options.json = true;
       continue;
@@ -144,9 +146,10 @@ async function v1(options, method, path, body, { auth = true } = {}) {
   const response = await fetch(`${baseOf(options)}${path}`, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) });
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) {
-    const e = payload.error || {};
+    const e = typeof payload.error === "string" ? { code: payload.error, message: payload.message } : (payload.error || {});
+    const recv = payload.receiver_status != null ? `\n  receiver HTTP ${payload.receiver_status}${payload.receiver_body ? `: ${payload.receiver_body}` : ""} · attempts ${payload.attempts}${payload.hint ? `\n  hint: ${payload.hint}` : ""}` : "";
     const extra = Array.isArray(e.fields) ? `\n  ${e.fields.map((f) => `${f.key}: ${f.message}`).join("\n  ")}` : "";
-    throw new Error(`${e.code || response.status}: ${e.message || "request failed"}${extra}`);
+    throw new Error(`${e.code || response.status}: ${e.message || "request failed"}${extra}${recv}`);
   }
   return payload;
 }
@@ -282,12 +285,14 @@ const memberCommands = {
     out(o, await v1(o, "POST", `/api/v1/invites/${encodeURIComponent(inviteCode(c))}/redeem`, {}), (r) => `${r.already ? "already accepted" : "accepted"} → ${r.next}${r.role_id ? `\nthen: sunfish apply ${r.role_id}` : ""}`); },
   async webhook(o) {
     needKey(); const sub = o.positional[0] || "get"; const P = "/api/v1/me/webhook";
-    const show = (w) => w ? `${w.url}  [${w.enabled ? "enabled" : `disabled: ${w.disabled_reason || ""}`}]\nevents: ${(w.events || ["all"]).join(", ")} · projects: ${(w.project_ids || ["all"]).join(", ")}\nsecret: ${w.secret ? `${w.secret}   <- shown once, save it now` : w.secret_prefix} · failures ${w.consecutive_failures} · last ok ${w.last_success_at || "-"}` : "(no webhook; sunfish webhook set --url https://…)";
+    const show = (w) => w ? `${w.url}  [${w.enabled ? "enabled" : `disabled: ${w.disabled_reason || ""}`}]\nevents: ${(w.events || ["all"]).join(", ")} · projects: ${(w.project_ids || ["all"]).join(", ")}\n${w.auth_header ? `auth header: ${w.auth_header.name}: ${w.auth_header.value}\n` : ""}secret: ${w.secret ? `${w.secret}   <- shown once, save it now` : w.secret_prefix} · failures ${w.consecutive_failures} · last ok ${w.last_success_at || "-"}` : "(no webhook; sunfish webhook set --url https://…)";
     const list = (s) => (s ? String(s).split(",").map((x) => x.trim()).filter(Boolean) : undefined);
     if (sub === "get") { const r = await v1(o, "GET", P); const d = r.webhook ? await v1(o, "GET", `${P}/deliveries?limit=5`) : { deliveries: [] };
       return out(o, { ...r, deliveries: d.deliveries }, (x) => [show(x.webhook), ...x.deliveries.map((e) => `  ${e.created_at} ${e.event_type} ${e.status} x${e.attempts}${e.http_status ? ` HTTP ${e.http_status}` : ""}${e.last_error ? ` ${e.last_error}` : ""}`)].join("\n")); }
     if (sub === "set") { const body = {}; if (o.url) body.url = o.url; if (o.events !== undefined) body.events = o.events === "all" ? null : list(o.events); if (o.projects !== undefined) body.project_ids = o.projects === "all" ? null : list(o.projects);
       if (o.enable) body.enabled = true; if (o.disable) body.enabled = false;
+      if (o.noAuthHeader) body.auth_header = null;
+      else if (o.authHeader !== undefined) { const m = String(o.authHeader).match(/^\s*([A-Za-z0-9-]+)\s*:\s*(.+)$/s); if (!m) throw new Error("--auth-header must look like 'Authorization: Bearer xxx'"); body.auth_header = { name: m[1], value: m[2].trim() }; }
       return out(o, await v1(o, "PUT", P, body), (r) => `${r.created ? "registered" : "updated"}\n${show(r.webhook)}`); }
     if (sub === "test") { let r; try { r = await v1(o, "POST", `${P}/test`, {}); } catch (e) { throw new Error(`test failed: ${e.message}`); }
       return out(o, r, (x) => `ok · HTTP ${x.http_status} · event ${x.event_id} · attempts ${x.attempts}`); }
