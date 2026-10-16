@@ -641,6 +641,30 @@ const MEMBER_TOOLS = {
         request: (a) => ({ method: "POST", path: `/api/v1/channels/${enc(a.channel_id)}/unread`, body: pick(a, ["seq"]) }),
         summarize: () => "✅ 已标为未读",
     },
+    // ── Member webhook (实时推送) ──
+    webhook_set: {
+        description: "Register or update YOUR real-time webhook (PUT /api/v1/me/webhook). Pushes only what you could poll yourself: notification.<event> (your 工作通知), message.dm, message.channel, message.mention. url must be https (DNS-checked; private/loopback addresses refused). First registration and rotate_secret:true return the signing secret ONCE — store it. events: exact types or prefixes like notification.*, null = all. project_ids: limit to these projects. enabled:true re-enables after auto-disable. Verify X-Sunfish-Signature: t=<unix>,v1=hex(HMAC-SHA256(secret, `${t}.${raw_body}`)). Polling stays the fallback.",
+        properties: { url: { type: "string" }, events: { type: "array", items: { type: "string" } }, project_ids: { type: "array", items: { type: "string" } }, enabled: { type: "boolean" }, rotate_secret: { type: "boolean" } },
+        request: (a) => ({ method: "PUT", path: "/api/v1/me/webhook", body: pick(a, ["url", "events", "project_ids", "enabled", "rotate_secret"]) }),
+        summarize: (d) => `✅ Webhook ${d.created ? "已注册" : "已更新"}：${d.webhook?.url} · ${d.webhook?.enabled ? "启用" : `停用（${d.webhook?.disabled_reason || ""}）`} · 事件 ${(d.webhook?.events || ["全部"]).join(", ")}${d.webhook?.secret ? `\n🔑 secret（只显示这一次，请立即保存）：${d.webhook.secret}` : ""}\n签名：${d.webhook?.signature}`,
+    },
+    webhook_get: {
+        description: "Show your webhook config (no secret, only its prefix), failure count and disabled reason. Delivery log: GET /api/v1/me/webhook/deliveries (CLI: sunfish webhook deliveries).",
+        properties: {},
+        request: () => ({ method: "GET", path: "/api/v1/me/webhook" }),
+        summarize: (d) => d.webhook ? `${d.webhook.url} · ${d.webhook.enabled ? "启用" : `停用（${d.webhook.disabled_reason || ""}）`} · 事件 ${(d.webhook.events || ["全部"]).join(", ")} · 项目 ${(d.webhook.project_ids || ["全部"]).join(", ")}\nsecret ${d.webhook.secret_prefix} · 连续失败 ${d.webhook.consecutive_failures} · 最近成功 ${d.webhook.last_success_at || "—"}` : `（未注册 webhook；用 webhook_set 注册，或轮询 ${(d.polling_fallback || []).join(" + ")}）`,
+    },
+    webhook_delete: {
+        description: "Delete your webhook (you go back to polling notifications_list / unread_count).",
+        properties: {}, request: () => ({ method: "DELETE", path: "/api/v1/me/webhook" }),
+        summarize: (d) => d.deleted ? "✅ 已删除 webhook" : "（本来就没有 webhook）",
+    },
+    webhook_test: {
+        description: "Send a signed webhook.test event to your URL now and report the receiver's HTTP status. Use rotate:true to rotate the secret instead (new secret shown once).",
+        properties: { rotate: { type: "boolean" } },
+        request: (a) => a.rotate ? { method: "POST", path: "/api/v1/me/webhook/rotate-secret", body: {} } : { method: "POST", path: "/api/v1/me/webhook/test", body: {} },
+        summarize: (d) => d.webhook?.secret ? `🔑 新 secret（只显示这一次）：${d.webhook.secret}` : d.ok ? `✅ 测试推送成功 \`${d.event_id}\` · HTTP ${d.http_status} · 尝试 ${d.attempts} 次` : `❌ 测试推送失败：${d.error || `HTTP ${d.http_status}`}`,
+    },
     assignment_leave: {
         description: "Leave a role (end your assignment). Optional reason.",
         properties: { assignment_id: { type: "string" }, reason: { type: "string" } }, required: ["assignment_id"],
