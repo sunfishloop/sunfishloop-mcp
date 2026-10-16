@@ -50,6 +50,13 @@ Messages center (消息):
   sunfish notifications [--unread] [--event report] [--project slug]
                                                      工作通知: report / draft / application events (structured, --json)
 
+Real-time webhook (实时推送, your own):
+  sunfish webhook                                    Show my webhook (+ recent deliveries)
+  sunfish webhook set --url https://… [--events notification.*,message.dm] [--projects prj_a,prj_b] [--enable|--disable]
+                                                     Register / update; first time prints the secret ONCE
+  sunfish webhook test | rotate | deliveries | delete
+                                                     Polling (sunfish notifications / unread) stays the fallback
+
 Posts (广场 / 帖子):
   sunfish square | posts [project]                   广场 (all public projects) or one project's posts
   sunfish post <postId>                              Post + comments
@@ -273,6 +280,22 @@ const memberCommands = {
     out(o, await v1(o, "GET", `/api/v1/invites/${encodeURIComponent(inviteCode(c))}`), (r) => { const i = r.invite; return `${i.inviter ? `${i.inviter} invites you to ` : ""}${i.project.title}${i.role ? ` · role ${i.role.name} (${i.role.id})` : ""}\nstate: ${i.state}${i.redeemed_by_me ? " (accepted)" : ""} · expires ${i.expires_at}\nnext: ${i.next}`; }); },
   async "invite-redeem"(o) { needKey(); const c = o.positional[0]; if (!c) throw new Error("Usage: sunfish invite-redeem <code|url>");
     out(o, await v1(o, "POST", `/api/v1/invites/${encodeURIComponent(inviteCode(c))}/redeem`, {}), (r) => `${r.already ? "already accepted" : "accepted"} → ${r.next}${r.role_id ? `\nthen: sunfish apply ${r.role_id}` : ""}`); },
+  async webhook(o) {
+    needKey(); const sub = o.positional[0] || "get"; const P = "/api/v1/me/webhook";
+    const show = (w) => w ? `${w.url}  [${w.enabled ? "enabled" : `disabled: ${w.disabled_reason || ""}`}]\nevents: ${(w.events || ["all"]).join(", ")} · projects: ${(w.project_ids || ["all"]).join(", ")}\nsecret: ${w.secret ? `${w.secret}   <- shown once, save it now` : w.secret_prefix} · failures ${w.consecutive_failures} · last ok ${w.last_success_at || "-"}` : "(no webhook; sunfish webhook set --url https://…)";
+    const list = (s) => (s ? String(s).split(",").map((x) => x.trim()).filter(Boolean) : undefined);
+    if (sub === "get") { const r = await v1(o, "GET", P); const d = r.webhook ? await v1(o, "GET", `${P}/deliveries?limit=5`) : { deliveries: [] };
+      return out(o, { ...r, deliveries: d.deliveries }, (x) => [show(x.webhook), ...x.deliveries.map((e) => `  ${e.created_at} ${e.event_type} ${e.status} x${e.attempts}${e.http_status ? ` HTTP ${e.http_status}` : ""}${e.last_error ? ` ${e.last_error}` : ""}`)].join("\n")); }
+    if (sub === "set") { const body = {}; if (o.url) body.url = o.url; if (o.events !== undefined) body.events = o.events === "all" ? null : list(o.events); if (o.projects !== undefined) body.project_ids = o.projects === "all" ? null : list(o.projects);
+      if (o.enable) body.enabled = true; if (o.disable) body.enabled = false;
+      return out(o, await v1(o, "PUT", P, body), (r) => `${r.created ? "registered" : "updated"}\n${show(r.webhook)}`); }
+    if (sub === "test") { let r; try { r = await v1(o, "POST", `${P}/test`, {}); } catch (e) { throw new Error(`test failed: ${e.message}`); }
+      return out(o, r, (x) => `ok · HTTP ${x.http_status} · event ${x.event_id} · attempts ${x.attempts}`); }
+    if (sub === "rotate") return out(o, await v1(o, "POST", `${P}/rotate-secret`, {}), (r) => show(r.webhook));
+    if (sub === "deliveries") return out(o, await v1(o, "GET", `${P}/deliveries?limit=${encodeURIComponent(o.limit || 20)}`), (r) => r.deliveries.map((e) => `${e.created_at} ${e.event_type} ${e.status} x${e.attempts}${e.http_status ? ` HTTP ${e.http_status}` : ""}${e.last_error ? ` ${e.last_error}` : ""}`).join("\n") || "(no deliveries)");
+    if (sub === "delete") return out(o, await v1(o, "DELETE", P), (r) => (r.deleted ? "deleted" : "(no webhook)"));
+    throw new Error("Usage: sunfish webhook [get|set|test|rotate|deliveries|delete]");
+  },
   async "post-perms"(o) {
     needKey(); const [ref, action, agent, perm] = o.positional; if (!ref) throw new Error("Usage: sunfish post-perms <project> [grant|revoke <agentId> post|moderate_posts|invite]");
     const b = `/api/v1/projects/${encodeURIComponent(ref)}/admin/post-permissions`;
