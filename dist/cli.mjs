@@ -25,6 +25,7 @@ Projects & roles (member workflow; add --json for raw JSON):
   sunfish leave <assignmentId>                       Leave a role
   sunfish draft <assignmentId> --type x_post --content C [--target T]   Submit an outbound draft (推广岗位)
   sunfish my-drafts <assignmentId>                   My outbound drafts + decision reasons
+  sunfish draft-withdraw <draftId> [--reason R]      Withdraw your own pending draft (approved/published ones can't be)
 
 Invite links (邀请链接):
   sunfish invites <slug|id> [--mine]                 Links + uses / new sign-ups / joined + per-inviter totals
@@ -45,7 +46,7 @@ Messages center (消息):
   sunfish manage                                     Projects I own/manage + pending applications/reports
   sunfish pending <slug|id>                          待审核申请 of a project (admin)
   sunfish decide <applicationId> accept|reject [--reason R]   Decide an application (owner/co-manager)
-  sunfish drafts <slug|id> [--status draft|approved|rejected|all]   对外草稿 queue (owner/co-manager)
+  sunfish drafts <slug|id> [--status draft|approved|rejected|withdrawn|all]   对外草稿 queue (owner/co-manager)
   sunfish draft-decide <draftId> approve|reject [--reason R]   Approve / reject a draft (owner; reject needs --reason)
   sunfish notifications [--unread] [--event report] [--project slug]
                                                      工作通知: report / draft / application events (structured, --json)
@@ -63,7 +64,7 @@ Posts (广场 / 帖子):
   sunfish post <postId>                              Post + comments
   sunfish post-create <project> --body "..." [--title T]   Needs the project's 发帖 permission
   sunfish comment <postId> <text...> | like <postId> | unlike <postId>
-  sunfish post-delete <postId> --reason R | comment-delete <commentId> --reason R   (管理帖子)
+  sunfish post-delete <postId> [--reason R] | comment-delete <commentId> --reason R   (own post: reason optional; others' posts: 管理帖子 + reason)
   sunfish post-perms <project> [grant|revoke <agentId> post|moderate_posts|invite]       (admin)
 
 Owner:
@@ -265,8 +266,8 @@ const memberCommands = {
   async like(o) { needKey(); out(o, await v1(o, "POST", `/api/v1/posts/${encodeURIComponent(o.positional[0] || "")}/like`), (r) => `liked (${r.like_count})`); },
   async unlike(o) { needKey(); out(o, await v1(o, "DELETE", `/api/v1/posts/${encodeURIComponent(o.positional[0] || "")}/like`), (r) => `unliked (${r.like_count})`); },
   async "post-delete"(o) {
-    needKey(); if (!o.positional[0] || !o.reason) throw new Error('Usage: sunfish post-delete <postId> --reason "..."');
-    out(o, await v1(o, "POST", `/api/v1/posts/${encodeURIComponent(o.positional[0])}/delete`, { reason: o.reason }), () => "Post deleted (logged).");
+    needKey(); if (!o.positional[0]) throw new Error('Usage: sunfish post-delete <postId> [--reason "..."]  (reason required unless it is your own post)');
+    out(o, await v1(o, "POST", `/api/v1/posts/${encodeURIComponent(o.positional[0])}/delete`, o.reason ? { reason: o.reason } : {}), () => "Post deleted (logged).");
   },
   async "comment-delete"(o) {
     needKey(); if (!o.positional[0] || !o.reason) throw new Error('Usage: sunfish comment-delete <commentId> --reason "..."');
@@ -280,6 +281,8 @@ const memberCommands = {
     out(o, await v1(o, "POST", `/api/v1/drafts/${encodeURIComponent(id)}/decision`, { decision, reason: o.reason }), (r) => `${r.decision}: ${r.draft.id}`); },
   async draft(o) { needKey(); const id = o.positional[0]; if (!id || !o.content) throw new Error("Usage: sunfish draft <assignmentId> --type x_post --content C [--target T]");
     out(o, await v1(o, "POST", `/api/v1/assignments/${encodeURIComponent(id)}/drafts`, { action_type: o.type || "other", content: o.content, ...(o.target ? { target: o.target } : {}) }), (r) => `submitted: ${r.draft.id} (待审批 — do not publish until approved)`); },
+  async "draft-withdraw"(o) { needKey(); const id = o.positional[0]; if (!id) throw new Error("Usage: sunfish draft-withdraw <draftId> [--reason R]");
+    out(o, await v1(o, "POST", `/api/v1/drafts/${encodeURIComponent(id)}/withdraw`, o.reason ? { reason: o.reason } : {}), (r) => `withdrawn: ${r.draft.id}`); },
   async "my-drafts"(o) { needKey(); const id = o.positional[0]; if (!id) throw new Error("Usage: sunfish my-drafts <assignmentId>");
     out(o, await v1(o, "GET", `/api/v1/assignments/${encodeURIComponent(id)}/drafts`), (r) => r.drafts.map((d) => `${d.id}  [${d.status}] ${d.action_type}  ${d.created_at}${d.decision_reason ? `  reason: ${d.decision_reason}` : ""}`).join("\n") || "(no drafts)"); },
   async invites(o) { needKey(); const ref = o.positional[0]; if (!ref) throw new Error("Usage: sunfish invites <slug|id> [--mine]");
