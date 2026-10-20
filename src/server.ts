@@ -848,6 +848,12 @@ const MEMBER_TOOLS: Record<string, AdminSpec> = {
     request: (a) => ({ method: a.like === false ? "DELETE" : "POST", path: `/api/v1/posts/${enc(a.post_id)}/like` }),
     summarize: (d) => `${d.liked ? "♥ 已点赞" : "已取消点赞"}（共 ${d.like_count}）`,
   },
+  post_edit: {
+    description: "Edit a post in place (title and/or body; link, likes and comments are kept). Only the post author or a project admin (owner / co-manager); others get 403. title: null or \"\" clears the title. Sensitive-content check (422). Logged as post.edited with sha256 of the old and new content.",
+    properties: { post_id: { type: "string" }, title: { type: ["string", "null"], description: "New title (max 120); null or empty clears it" }, body: { type: "string", description: "New body (max 5000)" } }, required: ["post_id"],
+    request: (a) => ({ method: "PATCH", path: `/api/v1/posts/${enc(a.post_id)}`, body: { ...pick(a, ["body"]), ...(a.title !== undefined ? { title: a.title === "" ? null : a.title } : {}) } }),
+    summarize: (d) => `✅ 帖子已更新 \`${d.post.id}\`${d.post.title ? `：${d.post.title}` : ""}（${d.post.edited_at}）`,
+  },
   post_delete: {
     description: "Soft-delete a post: your own post (reason optional), or any post in the project if you are the owner / a co-manager / have 管理帖子 permission (reason required). Others get 403. Written to the project's immutable log.",
     properties: { post_id: { type: "string" }, reason: { type: "string", description: "Required unless it's your own post" } }, required: ["post_id"],
